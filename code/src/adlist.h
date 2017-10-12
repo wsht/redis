@@ -1,6 +1,14 @@
 #ifndef __ADLIST_H__
 #define __ADLIST_H__
 
+
+/**
+ * redis 中链表的引用非常广泛，例如列表键的底层实现之一就是链表。而且redis中的链表结构被实现为双向链表，因此，在头部和尾部进行的操作非常的快
+ * LPUSH
+ * RPUSH
+ * LRANGE
+ */
+
 /* Node, list, and Iteraotr are the only data structures used currently. */
 
 // 每个连表节点由listNode来表示
@@ -24,7 +32,7 @@ typedef struct list{
 	listNode *head;  //链表头节点指针
 	listNode *tail;  //链表尾节点指针
 
-	//下面三个函数指针就像勒种的成员函数一样
+	//下面三个函数指针就像对象的成员函数一样
 	void *(*dup)(void *ptr); //复制链表节点保存的值
 	void (*free)(void *ptr);//释放链表节点保存的值
 	int (*match)(void *ptr, void *key); //比较链表节点所保存的节点值和另外一个输入值是否相等
@@ -32,6 +40,9 @@ typedef struct list{
 } list;
 
 //链表迭代器
+// 优点
+// 1.提供一种方法顺序的访问一个聚合对象中的各个元素，而又不需要暴露该对象的内部实现
+// 2.将指针操作进行封装，代码可读性增强
 typedef struct listIter{
 	listNode *next; //迭代器指向当前节点
 	int direacion; //迭代方向，可以取意向两个值:AL_START_HEAD和 AL_START_TAIL
@@ -60,6 +71,7 @@ typedef struct listIter{
 //链表操作的函数原型（prototypes）
 list *listCreate(void);
 void listRelease(list *list);//释放list的表头和链表
+void listEmpty(list *list); //??
 list *listAddNodeHead(list *list, void *value);
 list *listAddNodeTail(list *list, void *value);
 list *listInsertNode(list *list, listNode *old_node, void *value, int after);//在list中，根据after在old_node节点前后插入值为value的节点
@@ -68,4 +80,13 @@ void listDelNode(list *list, listNode *node);
 listIter *listGetIterator(list *list, int direction); //为list创建一个迭代器 iterator
 listNode *listNext(listIter *iter); //迭代返回list节点
 void listReleaseIterator(listIter *iter); //释放iter迭代器
+void listRewind(list *list, listIter *li); //将迭代器li重置为list的头节点，并且设置为正向迭代
+void listRewindTail(list *list, listIter *li);//将迭代器li充值未list的尾节点，并且设置为反向迭代
+
+list *listDup(list *orig); //拷贝表头为orig的链表并返回
+listNode *listSearchKey(list *list, void *key); //在list中查找value为key的节点并返回
+listNode *listIndex(list *list, long index); //返回小标为index的节点地址
+
+void listRotate(list *list); //将为节点插到头结点
+void listJoin(list *l, list *o);
 #endif /* __ADLIST_H__*/
