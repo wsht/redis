@@ -428,6 +428,13 @@ sds sdsgrowzero(sds s, size_t len){
     return s;
 }
 
+/**
+ * Append the specified binary-safe string pointerd by 't' of 'len' bytes to the
+ * end of the specified ss string 's'.
+ * 
+ * After the call, the passed sds string is no longer valid and all the
+ * references must be substitued with the new pointer returned by the call.
+ */
 sds sdscatlen(sds s,const void *t, size_t len)
 {
     size_t curlen = sdslen(s);
@@ -442,6 +449,549 @@ sds sdscatlen(sds s,const void *t, size_t len)
     return s;
 }
 
+/**
+ * Append the specified null termianted C string to the sds string 's'.
+ * 
+ * After the call, the passed sds string is no longer valid and all the
+ * references must be substitued with the new pointer returned by the call.
+ */
 sds sdscat(sds s, const chat *t){
     return sdscatlen(s, t, strlen(t));
 }
+
+/**
+ * Append the specified sds 't' to the existing sds 's'
+ * 
+ * After the call, the passed sds string is no longer valid and all the
+ * references must be substitued with the new pointer returned by the call.
+ */
+sds sdscatsds(sds s, const sds t)
+{
+    return sdscatlen(s, t, strlen(t));
+}
+
+/**
+ * Destructively modify the sds string 's' to hold the specified binary
+ * safe string pointed by 't' of length 'len' bytes.
+ */
+sds sdscpylen(sds s, const chat *t, size_t len)
+{
+    if(sdsalloc(s) < len){
+        s = sdsMakeRoomFor(s, len - sdslen(s));
+        if(s == NULL) return NULL;
+    }
+
+    memcpy(s,t,len);
+    s[len] = '\0';
+    sdssetlen(s, len);
+
+    return s;
+}
+
+/**
+ * Like sdscpylen(), but 't' must be a null-termined string so that the length
+ * of the string is obtained with strlen(). 
+ */
+sds sdscpy(sds s, const char *t)
+{
+    return sdscpylen(s, t, strlen(s));
+}
+
+/**
+ * Helper for sdscatlonglong() doing the actual number -> string
+ * conversion. 's' must point to a string with room for at last
+ * SDS_LLSTR_SIZE bytes.
+ * 
+ * The function returns the length of the null-terminated string
+ * representation stored at 's'.
+ * 
+ */
+#define SDS_LLSTR_SIZE 21
+int sdsll2str(char *s, long long value)
+{
+    char *p, aux;
+    unsigned long long v;
+    size_t l;
+
+    //Generate the string representation, this method produces
+    // an reversed string.
+    /**
+     * 例如 value = 10086 则 buf保存的数据为 |6|8|0|0|1|\0|
+     */
+    v = (value < 0) ? -value : value;
+    p=s;
+    do{
+        *p++ = '0' + (v%10);
+        v /= 10;
+    }while(v);
+
+    if(value < 0) *p++ = '-';
+
+    l = p - s;
+    *p = '\0';
+
+    /*Reverse the string.*/
+    /*将 |6|8|0|0|1|\0| 转换为 |1|0|0|8|6|\0|*/
+    p--;
+    while(s<p)
+    {
+        aux = *s;
+        *s = *p;
+        *p = aux;
+        s++;
+        p--;
+    }
+
+    return l;
+}
+
+/**
+ * Identical sdsll2str(), but for unsigned long long type.
+ */
+int sdsull2str(char *s, unsigned long long value)
+{
+    char *p, aux;
+    site_t l;
+
+    p=s;
+    do{
+        *p++ = '0'+(value%10);
+        v /= 10;
+    }while(value);
+
+    l = p-s;
+    *p = '\0';
+
+    p--;
+
+    while(s < p){
+        aux = *s;
+        *s = *p;
+        *p = aux;
+        s++;
+        p--;
+    }
+    
+    return l;
+}
+
+/**
+ * Create an sds string from a long long value. It is must faster than:
+ * sdscatprintf(sdsempty(),"%lld\n", value);
+ */
+sds sdsfromlonglong(long long value)
+{
+    char buf[SDS_LLSTR_SIZE];
+    int len = sdsll2str(value);
+
+    return sdsnewlen(buf, len);
+}
+
+sds sdscatvprintf(sds s, const char *fmt, va_list ap)
+{
+    va_list cpy;
+    char staticbuf[1024], *buf = staticbuf, *t;
+    size_t buflen = strlen(fmt)*2;
+
+    /**
+     *  We try to start using a static buffer for speed.
+     * if not possible we revert to heap allocation
+     * 
+     * 尝试以staticbuf 作为char 来进行加速，如果行不通，则
+     * 重新分配空间 
+     */
+    if(buflen > sizeof(staticbuf))
+    {
+        buf = s_malloc(buflen);
+        if(buf == NULL) return NULL;
+    }
+    else
+    {
+        buflen = sizeof(staticbuf);
+    }
+
+    /**
+     * Try with buffers two times bigger every time we fail to
+     * fit the string in the current buffer size.
+     */
+    while(1){
+        buf[buflen-2] = '\0';
+        va_copy(cpy, ap);
+        vsnprintf(buf, buflen, fmt, cpy);
+        va_end(cpy);
+        if(buf[buflen-2] != '\0')
+        {
+            if(buf != staticbuf) s_free(buf);
+            buflen *=2;
+            buf = s_malloc(buflen);
+            if(buf != NULL) return NULL;
+            
+            continue;
+        }
+        break;
+    }
+
+    t = sdscat(s,buf);
+    if(buf != staticbuf) s_free(buf);
+
+    return t;
+}
+
+/**
+ * Append to the sds string 's' a string obtained using prinf-alike format
+ * specifier
+ * 
+ * After the call, the passed sds string is no longer valid and all the
+ * references must be substitued with the new pointer returned by the call.
+ * 
+ * Example 
+ * s = sdsnew("Sum is :");
+ * s = sdscatprintf(s,"%d+%d=%d",a,b,a+b).
+ * 
+ * Often you need to create a string from scratch with the printf-alike
+ * format. When this is the need, just use sdsempty() as the target string:
+ * 
+ * s = sdscatprintf(sdsempty(), "...you format ...", args);
+ */
+sds sdscatprintf(sds s, const char *fmt, ...){
+    va_list ap;
+    char *t;
+    t = sdscatvprintf(s,fmt, ap);
+    va_end(ap);
+    return t;
+}
+
+/**
+ * This function is similar to sdscatprintf, but much faster as it does
+ * not rely on sprintf() family functions implementd(实现) by the libc that
+ * are often very slow. Moveover directly handling the sds string as 
+ * new data is concatenated provides a performance improvement.
+ * 
+ * However this function only handles an incompatible subset of printf-alike
+ * format specifiers:
+ * %s - C string
+ * %S - SDS string
+ * %i - signed int
+ * %I - 64 bit signed integer(long long, int64_t)
+ * %u - unsigned int
+ * %U - 64 bit unsigned integer(long long, uint64_t)
+ * %% - Verbatim "%"cahracter.
+ */
+sds sdscatfmt(sds s, char const *fmt, ...)
+{
+    size_t initlen = sdslen(s);
+    const char *f = fmt;
+    int i;
+    va_list ap;
+
+    va_start(ap, fmt);
+    f = fmt;    /* Next format specifier byte to process.*/
+    i = initlen;/* Position of the next bute to write to dest str.*/
+
+    while(*f)
+    {
+        char next, *str;
+        size_t l;
+        long long num;
+        unsigned long long unum;
+
+        /*Make sure there is always space for at least 1 char*/
+        if(sdsavail(s)==0)
+        {
+            s = sdsMakeRoomFor(s,1);
+        }
+
+        switch(*f){
+            case '%':
+                next = *(f+1);
+                f++;
+                switch(next){
+                    case's':
+                    case'S':
+                        str = va_arg(ap, char*);
+                        l = (next == 's') ? strlen(str) : sdslen(str);
+                        if(sdsavail(s) < l){
+                            s = sdsMakeRoomFor(s,l);
+                        }
+                        memcpy(s+i, str,l);
+                        sdsinclen(s,l);
+                        i +=l;
+                        break;
+                    case'i':
+                    case'I':
+                        if(next == 'i'){
+                            num = va_arg(ap, int);
+                        }
+                        else
+                        {
+                            num = va_arg(ap, long long);
+                        }
+
+                        {
+                            char buf[SDS_LLSTR_SIZE];
+                            l = sdsll2str(buf,num);
+                            if(sdsavail(s) < l)
+                            {
+                                s = sdsMakeRoomFor(s,l);
+                            }
+                            memcpy(s+i, buf,l);
+                            sdsinclen(s,l);
+                            i += l;
+                        }
+                        break;
+                    case 'u':
+                    case 'U':
+                        if(next == 'u')
+                        {
+                            num = va_arg(ap, unsigned int);
+                        }
+                        else
+                        {
+                            num = va_arg(ap, unsigned long long);
+                        }
+
+                        {
+                             char buf[SDS_LLSTR_SIZE];
+                            l = sdsll2str(buf,num);
+                            if(sdsavail(s) < l)
+                            {
+                                s = sdsMakeRoomFor(s,l);
+                            }
+                            memcpy(s+i, buf,l);
+                            sdsinclen(s,l);
+                            i += l;
+                        }
+                        break;
+                    default: /*handle %% and generally %<unknow>.*/
+                        s[i++] = next;
+                        sdsinclen(s,1);
+                        break;
+                }
+                break;
+            default:
+                s[i++] = *f;
+                sdsinclen(s,1);
+                break;    
+        }
+        f++
+    }
+
+    va_end(ap);
+    
+    /*Add null-term*/
+    s[i] = '\0';
+
+    return s;
+}
+
+/**
+ * Remove the part of the string from left and from right composed just of
+ * contiguous character found in 'cset', this is a null terminted C string.
+ * After the call, the passed sds string is no longer valid and all the
+ * references must be substitued with the new pointer returned by the call.
+ * 
+ * Example:
+ * 
+ * s = sdsnew("AA...AA.a.aa.a.HelloWorld      :::");
+ * s = sdstrim(s,"Aa. :");
+ * printf("%s\n", s);
+ * 
+ * output willbe just "HelloWorld"
+ */
+sds sdstrim(sds s, const char *cset)
+{
+    char *start, *end, *sp, *cp;
+    size_t len;
+
+    sp = start = s;
+    ep = end = s + sdslen(s)-1;
+    //从头开始遍历 s的字符串，如果s中的字符串出现在cset中，那么指针右移
+    while(sp <= end && strchr(cset, *sp)) sp++;
+    //从尾遍历字符串, 如果字符出现在cset中，那么尾指针左移
+    while(ep > sp && strchr(cset, *ep)) ep--;
+
+    //获取截取后字符串长度
+    len = (sp > ep) ? 0 : ((ep - sp) + 1);
+    //如果头部左侧被截取，那么将sp为起始点长度为len的内存中的值，赋给s指针地址为起始点内存的值 
+    if(s != sp) memmove(s, sp, len);
+    s[len] = '\0';
+    sdssetlen(s,len);
+    return s;
+}
+
+/**
+ * Turn the string into a smaller(or equal) string containing only the 
+ * substring specified by the 'start' and 'end' indexes.
+ * 
+ * start and end can be negative (负数的), where -1 means the last character of
+ * the string , -2  the penultimate character, and so forth.
+ * 
+ * The itnerval is inclusive, so the start and end characters will be part
+ * of the resulting string.
+ * 
+ * The string is modified in-place
+ * 
+ * Example:
+ * 
+ * s = sdsnew("hello word");
+ * sdsrange(s,1,-1); => ello world
+ */
+void sdsrange(sds s, int start, int end)
+{
+    size_t newlen, len = sdslen(s);
+
+    if(len == 0)return;
+    if(start < 0)
+    {
+        start = len + start;
+        //超出范围以后，算作起始位置
+        if(start < 0) start = 0;
+    }
+
+    if(end < 0)
+    {
+        end = len + end;
+        if(end < 0) end = 0;
+    }
+
+    newlen = (start > end) ? 0 : (end - start) + 1;
+
+    if(newlen != 0)
+    {
+        //start 越界 截取长度为0
+        if(start >= (signed) len)
+        {
+            newlen = 0;
+        }
+        //end越界，算作最后一个字符
+        else if(end >=(signed) len)
+        {
+            end = len - 1;
+            newlen = (start > end) ? 0 : (end - start) + 1;
+        }
+    }
+    else
+    {
+        start = 0;
+    }
+
+    if(start && newlen) memmove(s, s+start, newlen);
+
+    // why there is set 0 not a '\0';
+    s[newlen] = 0;
+    // s[newlen] = '\0';
+    sdssetlen(s,newlen);
+}
+
+/* Apply tolower() to every character of the sds string 's'. */
+void sdstolower(sds s)
+{
+    int len = sdslen(s), j;
+    for(j=0;j<len;j++) s[j] = tolower(s[j]);
+}
+
+void sdstoupper(sds s)
+{
+    int len = sdslen(s), j;
+    for(j=0;j<len;j++) s[j] = toupper(s[j]);
+}
+
+/**
+ * Compare tow sds string s1 and s2 with memcmp
+ * 
+ * Return value:
+ *      
+ *      positive  if s1 > s2.
+ *      negative  if s1 < s2.
+ *      0 if s1 and s2 are exactly the same binary string.
+ * 
+ * If two strings share exactly the same prefix, but one of the two has
+ * additional characters, th longer string is considered to the greater than
+ * the smaller one
+ */
+int sdscmp(const sds s1, const sds s2){
+    size_t l1, l2, minlen;
+    int cmp;
+
+    l1 = sdslen(s1);
+    l2 = sdslen(s2);
+    minlen = (l1 < l2) ? li : l2;
+    cmp = memcmp(s1,s2,minlen);
+    if(cmp == 0) return l1-l2;
+    return cmp;
+}
+
+/**
+ * Split 's' with separator in 'sep'. An array
+ * of sds string is returned. *count will be set
+ * by reference to the number of tokens returned.
+ * 
+ * On out of memory, zero length string, zero length
+ * separator, NULL is returned.
+ * 
+ * Note that 'sep' is able to split a string using
+ * a multi-character separator. For example
+ * sdssplit("foo_-_bar","_-_"); will return two element 'foo' and bar.
+ * 
+ * This version of the function is binary-safe but 
+ * requires length arguments. sdssplit() is just the 
+ * same function but for zero-termianted strrings.
+ * 
+ */
+sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count){
+    int elements = 0, slots = 5, start = 0, j;
+    sds *tokens;
+
+    if(seplen < 1 || len < 0) return NULL;
+
+    // ??
+    tokens = s_malloc(sizeof(sds) * slots);
+    if(tokens == NULL) return NULL;
+
+    if(len == 0)
+    {
+        *count = 0;
+        return tokens;
+    }
+
+    for(j=0; j<(len-(seplen-1)); j++)
+    {
+        /*make sure there si room for the next element and the final one*/
+        if(slots < elements + 2){
+            sds *newtokens;
+            
+            slots *= 2;
+            newtokens = s_realloc(tokens, sizeof(sds)*slots);
+            if(newtokens == NULL) goto cleanup;
+            tokens = newtokens; 
+        }
+
+        /*serarch the separator*/
+        if((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j,sep,setlen) == 0))
+        {
+            tokens[elements] = sdsnewlen(s+start, j-start);
+            if(tokens[elements] == NULL) goto cleanup;
+            elements ++;
+            start = j + seplen;
+            j = j + setlen -1; /*skip the separator*/
+        }
+    }
+
+    /*Add the final element. We are sure there is room in the tokens array. */
+    tokens[elements] = sdsnewlen(s+start, len-start);
+    if(tokens[elements] == NULL) goto cleanup;
+    elements++;
+    *count = elements;
+
+    return tokens;
+
+cleanup:
+    {
+        int i;
+        for(i=0;i<elements;i++) sdsfree(tokens[i]);
+        s_free(tokens);
+        *count = 0;
+        return NULL;
+    }
+}
+
