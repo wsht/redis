@@ -181,6 +181,12 @@ int dictExpand(dict *d, unsigned long size)
     return DICT_OK;
 }
 
+/**
+ * Performs N steps of incremental rehashing. Returns 1 if there are still
+ * keys to move from the old to the new hash table, otherwise 0 is returned.
+ * 
+ * 
+ */
 int dictRehash(dict *d, int n)
 {
     int empty_visits = n * 10;/*Max number of empty buckets to visit.*/
@@ -208,6 +214,7 @@ int dictRehash(dict *d, int n)
             nextde = de->next;
             /* Get the index in the new hash table*/
             h = dictHashKey(d, de->key) & d->ht[1].sizemask;
+            //每次插入 都将插入elements的头部
             de->next = d->ht[1].table[h];
             d->ht[1].table[h] = de;
             d->ht[0].used --;
@@ -230,4 +237,126 @@ int dictRehash(dict *d, int n)
 
     /*More to rehash...*/
     return 1;
+}
+
+long long timeInMilliseconds(void){
+    struct timeval tv;
+    
+    gettimeofday($tv,NULL);
+    return (((long long)tv.tv_sec)*1000)+(tv.tv_usec/1000);
+}
+
+/* Rehash for an amount of time between ms milliseconds and ms + 1 milliseconds*/
+int dictRehashMilliseconds(dict *d, int ms)
+{
+    long long start = timeInMilliseconds();
+    int rehashes = 0;
+
+    while(dictRehash(d,100)){
+        rehashes += 100;
+        if(timeInMilliseconds()-start > ms) break;
+    }
+
+    return rehashes;
+}
+
+/**
+ * This function performs just a step of rehashing, and only if there are
+ * no safe iterators bound to our hash table. when we have iterators in the
+ * middle of a rehashing we can't mess with the two hash tables otherwise
+ * some tltment can be missed or duplicated.
+ */
+static void _dictRehashStep(dict *d)
+{
+    if(d->iterators == 0) dictRehash(d, 1);
+}
+
+/* Add an element to the target hash table*/
+int dictAdd(dict *d, void *key, void *val)
+{
+    dictEnty *entry = dictAddRaw(d,key,NULL);
+    if(!entry) return DICT_ERR;
+
+    dictSetVal(d, entry, val);
+    return DICK_OK;
+}
+
+dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing){
+    int index;
+    dictEntry *entry;
+    dictht *ht;
+
+    if(dictIsRehashing(d)) _dictRehashStep(d);
+
+    /**
+     * Get the index of the new element, or -1 if 
+     * the element already exists.
+     */
+    if((index = _dictKeyIndex(d, key, dictHashKey(d,key), existing)) == -1)
+        return NULL;
+    
+    /**
+     * Allocate the memory and store the new entry.
+     * Insert the element in top, with the assumption that in a database
+     * system it is more likely that recently added entries are accessed
+     * more frequently.
+     */
+    ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
+    entry = zmalloc(sizeof(*entry));
+    entry->next = ht->table[index];
+    ht->table[index] = entry;
+    ht->used++;
+
+    /* Set the hash entry fields */
+    dictSetKey(d, entry, key);
+    
+    return entry;
+}
+
+static int _dictExpandIfNeeded(dict *d)
+{
+    /*Incremental rehashing already in progress. Return. */
+    if(dictIsRehashing(d)) return DICT_OK;
+}
+
+/**
+ * Returns the index of a free slot that can be populated with
+ * a hash entry for the given 'key'.
+ * 
+ * If the key already exists, -1 is returned
+ * and the optional output parameter may be filled
+ * 
+ * Note that if we are in the process of rehashing the hash table, the
+ * index is always returned in the context of the second(new) hash table.
+ */
+static int _dictKeyIndex(dict *d, const void *key, unsigned int hash, dictEntry **existing)
+{
+    unsigned int idx, table;
+    dictEntry *he;
+
+    if(existing) *existing = NULL;
+
+    /*Expand the hash table if needed*/
+    if(_dictExpandIfNeeded(d) == DICT_ERR)
+        return -1;
+    
+    for(table = 0; table <= 1; table++)
+    {
+        idx = hash & d->ht[table].sizemask;
+        /*Search if this slot does not already contain the given key*/
+        he = d->ht[table].table[idx];
+        while(he){
+            if(key == he->key || dictCompareKeys(d,key,he->key))
+            {
+                if(existing) *existing = he;
+                return -1;
+            }
+            he = he->next;
+        }
+        //如果当前没有进行 Rehashing 那么则不进行遍历d->ht[1]
+        //TODO ??是否有可能存在，在寻找过程中，rehash完成，由于并发，hash重复覆盖
+        if(!dictIsRehashing(d)) break;
+    }
+    
+    return idx;
 }
