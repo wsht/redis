@@ -944,7 +944,7 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
 
     if(seplen < 1 || len < 0) return NULL;
 
-    // ??
+    // 预先分配出5个数组的空间
     tokens = s_malloc(sizeof(sds) * slots);
     if(tokens == NULL) return NULL;
 
@@ -956,10 +956,11 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
 
     for(j=0; j<(len-(seplen-1)); j++)
     {
-        /*make sure there si room for the next element and the final one*/
+        /*make sure there is room for the next element and the final one*/
         if(slots < elements + 2){
             sds *newtokens;
             
+            //再次分配五个空间
             slots *= 2;
             newtokens = s_realloc(tokens, sizeof(sds)*slots);
             if(newtokens == NULL) goto cleanup;
@@ -973,6 +974,8 @@ sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count
             if(tokens[elements] == NULL) goto cleanup;
             elements ++;
             start = j + seplen;
+            //setlen - 1 可以使指针指向 separator的最后一个字符，然后j++
+            //以后，跳过separator.
             j = j + setlen -1; /*skip the separator*/
         }
     }
@@ -995,3 +998,16 @@ cleanup:
     }
 }
 
+/**
+ * Free the result returned by sdssplitlen(), or do nothing if 'tokens' is NULL
+ */
+void sdsfreesplitres(sds *tokens, int count){
+    if(!tokens) return;
+    while(count--)
+    {
+        sdsfree(tokens[count]);
+    }
+    s_free(tokens);
+};
+
+//TODO test 
