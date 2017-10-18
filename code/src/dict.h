@@ -68,7 +68,7 @@ typedef struct dict{
     void *privdata;//私有数据，保存着dictType结构中函数的参数
     dictht ht[2];//两张hash表
     long rehashidx; /* rehashing not in progress if rehashidx == -1 rehash的标记，如果为-1表示没有进行rehash*/
-    unsigned long iterators; /*number of iterators currently running*/
+    unsigned long iterators; /*number of iterators currently running*/ /*记录当前正在运行安全迭代器的数量*/
 }dict;
 
 typedef struct dictIterator{
