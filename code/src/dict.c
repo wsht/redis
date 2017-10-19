@@ -891,6 +891,9 @@ unsigned int dictGetSomeKeys(dict *d, dictEnty **des, unsigned int count)
      return v;
  }
 
+/**
+ * TODO
+ */
 unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, dictScanBucketFunction *bucketfn, void *privdata)
 {
     dictht *t0, *t1;
@@ -907,7 +910,71 @@ unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, dictScanB
         /* Emit entries at cursor */
         if(bucketfn) bucketfn(privdata, &t0->table[v & m0]); //?? why there use &
         de = t0->table[v & m0];
+        while(de)
+        {
+            next = de->next;
+            fn(privdata, de);
+            de = next;
+        }
     }
+    else
+    {
+        t0 = &d->ht[0];
+        t1 = &d->ht[1];
+
+        /*Make sure t0 is the smaller and t1 is the bigger table*/
+        if(t0->size > t1->size)
+        {
+            t0 = &d->ht[1];
+            t1 = &d->ht[0];
+        }
+
+        m0 = t0->sizemask;
+        m1 = t1->sizemask;
+
+        /*Emit entries at cursor */
+        if(bucketfn) bucketfn(privdata, &t0->table[v & m0]);
+        de = t0->table[v & m0];
+        while(de)
+        {
+            next = de->next;
+            fn(privdata, de);
+            de = next;
+        }
+
+        /**
+         * Iterate over indices in larger table that are the expansion
+         * of the index pointed to by the cursor in the smaller table
+         */
+        do{
+            /* Emit entries at cursor */
+            if(bucketfn) bucketfn(privdata, &t1->table[v & m1]);
+            de = t1->table[v & m1];
+            while(de)
+            {
+                next = de->next;
+                fn(privdata, de);
+                de = next;
+            }
+
+            /*Increment bits not covered by the smaller mask*/
+            v = ((( v | m0 ) + 1 ) & ~m0) | (v & m0);
+
+            /* continue thile bits covered by mask difference is non-zero */
+        }while(v & (m0 ^ m1));
+    }
+
+    /**
+     * Set unmasked bit so incrementing the reversed cursor
+     * operates on the masked bits of the smaller table */
+    v |= ~m0;
+
+    /* Increment the reverse cursor */
+    v = rev(v);
+    v++;
+    v = rev(v);
+
+    return v;
 }
 
 /**
@@ -936,6 +1003,19 @@ static int _dictExpandIfNeeded(dict *d)
     }
 
     return DICT_OK;
+}
+
+/* Our hash table capability is a power of two */
+static unsigned long _dictNextPower(unsigned long size)
+{
+    unsigned long i = DICT_HT_INITAL_SIZE;
+    if(size > LONG_MAX) return LONG_MAX;
+    while(1)
+    {
+        if(i >= size)
+            return i;
+        i *= 2;
+    }
 }
 
 /**
@@ -983,3 +1063,32 @@ static int _dictKeyIndex(dict *d, const void *key, unsigned int hash, dictEntry 
 
     return idx;
 }
+
+void dictEmpty(dict *d, void(callback)(void*))
+{
+    _dictClear(d, &d->ht[0], callback);
+    _dictClear(d, &d->ht[1], callback);
+    d->rehashidx = -1;
+    d->iterators = 0;
+}
+
+void dictEnableResize(void)
+{
+    dict_can_resize = 1;
+}
+
+void dictDisableResize(void)
+{
+    dict_can_resize = 0;
+}
+
+unsigned int dictGetHash(dict *d, const void *key)
+{
+    return dictHashKey(d, key);
+}
+
+/**
+ * TODO dictFindEntryRefByPtrAndHash
+ */
+
+/* TODO debugging */
