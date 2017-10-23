@@ -118,6 +118,10 @@ int zslRandomLevel(void)
  * Insert a new node in the skiplist. Assumes the element does not already
  * exist(up to the caller to enforce that). The skiplist takes ownership
  * of the passed SDS string 'ele'.
+ * 
+ * insert delete see:
+ * http://blog.sina.com.cn/s/blog_72995dcc01017w1t.html
+ * http://joezhengjinhong.blog.51cto.com/7791846/1575545
  */
 zskiplistNode *zslInster(zskiplist *zsl, double score, sds ele)
 {
@@ -136,7 +140,7 @@ zskiplistNode *zslInster(zskiplist *zsl, double score, sds ele)
                 (x->level[i].forward->score == score &&
                 sdscmp(x->level[i].forward->ele, ele)<0)))
         {
-            rank[i] += x->level[i].span;
+            rank[i] += x->level[i].span;// ??
             x = x->level[i].forward;
         }
         update[i] = x;
@@ -148,4 +152,119 @@ zskiplistNode *zslInster(zskiplist *zsl, double score, sds ele)
      * caller of zsInsert() should test in the hash table if the element is 
      * already inside or not
      */
+    level = zslRandomLevel();
+    if(level > zsl->level)
+    {
+        for(i = zsl->level; i < level; i++)
+        {
+            rank[i] = 0;
+            update[i] = zsl->header;
+            update[i]->level[i].span = zsl->length;
+        }
+        zsl->level = level;
+    }
+    x = zslCreateNode(level, score, ele);
+    for(i=0; i < level; i++)
+    {
+        x->level[i].forward = update[i]->level[i].forward;
+        update[i]->level[i].forward = x;
+
+        /*update span covered by update[i] as x is inserted here*/
+        x->level[i].span = update[i]->level[i].span - (rank[0] - rank[1]);
+        update[i]->level[i].span = (rank[0] - rank[i]) + 1;
+    }
+
+    /* increment span for uptouched levels */
+    for(i = level; i < zsl->level; i++)
+    {
+        update[i]->level[i].span++;
+    }
+
+    //是否插入到头节点
+    x->backward = (update[0] == zsl->header) ? NULL : update[0];
+    if(x->level[0].forward)
+        x->level[0].forward->backward = x;
+    else
+        zsl->tail = x;
+    zsl->length++;
+
+    return x;
+}
+
+void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update){
+    int i;
+    for(i=0; i<zsl->level; i++)
+    {
+        if(update[i]->level[i].forward == x)
+        {
+            update[i]->level[i].span += x->level[i].span -1;
+            update[i]->level[i].forward = x->level[i].forward;
+        }
+        else
+        {
+            update[i]->level[i].span -= 1;
+        }
+    }
+
+    if(x->level[0].forward)
+    {
+        x->level[0].forward->backward = x->backward;
+    }
+    else
+    {
+        zsl->tail = x->backward;
+    }
+
+    while(zsl->level > 1 && zsl->header->level[zsl->level-1].forward == NULL)
+        zsl->level--;
+    
+    zsl->length --;
+}
+
+/**
+ * Delete an element with matching score/element from the skiplist.
+ * The function returs 1 if the node was found and deleted, otherwise
+ * 0 is returned.
+ * 
+ * if 'node' is NULL the deleted node is freed by zslFreeNode(), otherwise
+ * it is not freed(but just unlinked) and *node is set to the node pointer,
+ * so that is is possible for the caller to reuse the node (includeing the 
+ * referenced SDS string at node->ele ).
+ */
+int zslDeleteNode(zskiplist *zsl, double score, sds ele, zskiplistNode **node)
+{
+    zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
+    int i;
+
+    x = zsl->header;
+    for(i = zsl->level -1, i>=0; i--)
+    {
+        while(x->level[i].forward && 
+            (x->level[i].forward->score < score || 
+                (x->level[i].forward->score == score &&
+                sdscmp(x->level[i].forward->ele, ele)<0)))
+        {
+            x = x->level[i].forward;
+        }
+        update[i] = x;
+    }
+
+    /**
+     * We may have multiple elements with the same score, what we need
+     * is to find the element with both the right score and object.
+     */
+    //由于是顺序链表，所以经过上面的筛选，此x节点以前所有的值的score以及ele都是不相等的
+    //只有此节点的下一个节点是和当score以及ele可能相等的
+     x = x->level[0].forward;
+     if(x && score == x->score && sdscmp(x->ele, ele) == 0)
+     {
+         zslDeleteNode(zsl, x, update);
+         if(!node)
+            zslFreeNode(x);
+        else
+            *node = x;
+        return 1;
+     }
+
+     return 0;// not found
 }

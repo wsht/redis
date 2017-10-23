@@ -91,4 +91,4 @@ typedef struct{
 typedef struct{
     sds min, max; //May be set to shared.(minstring|maxstring)
     int minex, maxex; // are min or max exclusive?
-}
+}zlexrangespec;
