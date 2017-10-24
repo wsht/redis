@@ -231,7 +231,7 @@ void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update){
  * so that is is possible for the caller to reuse the node (includeing the 
  * referenced SDS string at node->ele ).
  */
-int zslDeleteNode(zskiplist *zsl, double score, sds ele, zskiplistNode **node)
+int zslDelete(zskiplist *zsl, double score, sds ele, zskiplistNode **node)
 {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x;
     int i;
@@ -267,4 +267,36 @@ int zslDeleteNode(zskiplist *zsl, double score, sds ele, zskiplistNode **node)
      }
 
      return 0;// not found
+}
+
+int zslValueGteMin(double value, zrangespec *spec){
+    return spec->minex ? (value > spec->min) : (value >= spec->min); 
+}
+
+int zslValueLteMax(double value, zrangespec *spec)
+{
+    return spec->maxex ? (value < spec->max) : (value <= spec->max)
+}
+
+/**
+ * Returns if there is a part of the zset is in range.
+ */
+int zslIsInRange(zskiplist *zsl, zrangespec *range)
+{
+    zskiplistNode *x;
+
+    /*Test for ranges that will always be empty.*/
+    if(range->min > range->max ||
+        (range->min == range->max && (rage->minex || range->maxex))){
+            return 0;
+        }
+    x=zsl->tail;
+    if(x==NULL || !zslValueGteMin(x->score, range))
+        return 0;
+
+    x = zsl->header->level[0].forward;
+    if(x==NULL || !zslValueLteMax(x->score, range))
+        return 0;
+    
+    return 1;
 }
